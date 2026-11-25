@@ -1,5 +1,4 @@
 import express from 'express';
-import session from 'express-session';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 
@@ -16,12 +15,11 @@ export function createProxyDiagnostic({ trustProxy, token, logger }) {
   app.set('trust proxy', trustProxy);
   app.use((_req, res, next) => { res.set('Cache-Control', 'private, no-store'); res.set('X-Content-Type-Options', 'nosniff'); next(); });
   app.get('/health', (_req, res) => res.json({ status: 'diagnostic' }));
-  const probeSession = session({ name: 'sv.proxycheck', secret: randomBytes(32).toString('hex'), store: new session.MemoryStore(), resave: false, saveUninitialized: false, cookie: { secure: true, httpOnly: true, sameSite: 'lax', maxAge: 60000 } });
   const tokenHash = hash(token);
   app.get('/api/__proxy_diag', (req, res, next) => {
     if (!timingSafeEqual(hash(req.get('x-proxy-diagnostic-token') || ''), tokenHash)) return res.sendStatus(404);
     next();
-  }, probeSession, (req, res) => {
+  }, (req, res) => {
     const raw = req.get('x-forwarded-for') || '';
     const items = raw && raw.length <= 2048 ? raw.split(',') : [];
     const parts = items.slice(0, 16).map(part => ipOrNull(part));
@@ -38,9 +36,9 @@ export function createProxyDiagnostic({ trustProxy, token, logger }) {
       secure: req.secure,
       probeCookieExpected: req.secure,
     };
-    // The probe session contains no account data; express-session decides whether
-    // to emit its Secure cookie using the exact same logic as the real session.
-    req.session.probe = true;
+    // This is a disposable, non-authenticating cookie, not an application session.
+    // The real express-session cookie must still be verified in normal mode.
+    if (req.secure) res.cookie('sv.proxycheck', randomBytes(16).toString('hex'), { secure: true, httpOnly: true, sameSite: 'lax', maxAge: 60000 });
     logger.info({ event: 'proxy_diagnostic', ...info }, 'proxy_diagnostic');
     res.json(info);
   });

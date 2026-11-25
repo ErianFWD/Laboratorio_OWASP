@@ -49,6 +49,15 @@ test('recorridos de seguridad sobre PostgreSQL desechable', { skip: !url, timeou
       assert.equal((await c.request('/api/auth/registro','POST',{name:address,email:address,password:pass})).status, 201);
       assert.equal((await c.request('/api/auth/login','POST',{email:address,password:pass})).status, 200);
     }
+    const sessionOwner = (await pool.query("SELECT id FROM securevault.users WHERE email='b@example.test'")).rows[0].id;
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM securevault.sessions WHERE sess->>'userId'=$1", [sessionOwner])).rows[0].n, 1);
+    const secondApp = createApp({ pool: appPool, settings, logger, sendRecovery: async () => {} });
+    const secondServer = secondApp.listen(0, '127.0.0.1'); await new Promise(resolve => secondServer.once('listening', resolve));
+    try {
+      const response = await fetch(`http://127.0.0.1:${secondServer.address().port}/api/auth/me`, { headers: { cookie: b.getCookie() } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).user.id, sessionOwner);
+    } finally { await new Promise(resolve => secondServer.close(resolve)); }
     const created = await a.request('/api/notas','POST',{content:"Nota de O'Brien <script>"}); assert.equal(created.status,201); const id = created.data.note.id;
     assert.equal((await a.request(`/api/notas/${id}`)).data.note.content,"Nota de O'Brien <script>");
     assert.equal((await a.request(`/api/notas/${id}`,'PATCH',{content:'Edición propia'})).status,200);
